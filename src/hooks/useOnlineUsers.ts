@@ -1,14 +1,13 @@
-import { useState, useEffect } from 'react';
-import { 
-  collection, 
+import { useEffect, useState } from 'react';
+import {
+  collection,
   doc,
-  setDoc,
-  deleteDoc,
   onSnapshot,
   serverTimestamp,
+  setDoc,
   query,
   where,
-  Timestamp 
+  Timestamp,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { User } from 'firebase/auth';
@@ -28,81 +27,56 @@ export const useOnlineUsers = (user: User | null) => {
   useEffect(() => {
     if (!user) return;
 
-    // Set user as online when they connect
-    const setUserOnline = async () => {
-      try {
-        await setDoc(doc(db, 'onlineUsers', user.uid), {
+    const userRef = doc(db, 'onlineUsers', user.uid);
+
+    const goOnline = async () => {
+      await setDoc(
+        userRef,
+        {
           uid: user.uid,
-          displayName: user.displayName || user.email?.split('@')[0] || 'Anonymous',
           email: user.email,
+          displayName: user.displayName || user.email?.split('@')[0] || 'Anonymous',
+          isOnline: true,
           lastSeen: serverTimestamp(),
-          isOnline: true
-        });
-      } catch (error) {
-        console.error('Error setting user online:', error);
-      }
+        },
+        { merge: true }
+      );
     };
 
-    // Set user as offline when they disconnect
-    const setUserOffline = async () => {
-      try {
-        await setDoc(doc(db, 'onlineUsers', user.uid), {
-          uid: user.uid,
-          displayName: user.displayName || user.email?.split('@')[0] || 'Anonymous',
-          email: user.email,
+    const goOffline = async () => {
+      await setDoc(
+        userRef,
+        {
+          isOnline: false,
           lastSeen: serverTimestamp(),
-          isOnline: false
-        });
-      } catch (error) {
-        console.error('Error setting user offline:', error);
-      }
+        },
+        { merge: true }
+      );
     };
 
-    setUserOnline();
+    goOnline();
 
-    // Listen for online users
-    const onlineUsersRef = collection(db, 'onlineUsers');
-    const q = query(onlineUsersRef, where('isOnline', '==', true));
-    
+    const q = query(collection(db, 'onlineUsers'), where('isOnline', '==', true));
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const users: OnlineUser[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        users.push({
-          uid: data.uid,
-          displayName: data.displayName,
-          email: data.email,
-          lastSeen: data.lastSeen,
-          isOnline: data.isOnline
-        });
-      });
-      setOnlineUsers(users);
+      const users: OnlineUser[] = snapshot.docs.map((doc) => doc.data() as OnlineUser);
+      setOnlineUsers(users.filter((u) => u.uid !== user.uid));
       setLoading(false);
     });
 
-    // Update user's last seen every 30 seconds
-    const heartbeatInterval = setInterval(() => {
-      setUserOnline();
-    }, 30000);
+    // Update online status every 25 seconds
+    const heartbeat = setInterval(goOnline, 25000);
 
-    // Set user offline when they leave
-    const handleBeforeUnload = () => {
-      setUserOffline();
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    // Offline when window closes
+    window.addEventListener('beforeunload', goOffline);
 
     return () => {
-      clearInterval(heartbeatInterval);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      setUserOffline();
       unsubscribe();
+      clearInterval(heartbeat);
+      window.removeEventListener('beforeunload', goOffline);
+      goOffline();
     };
   }, [user]);
 
-  return {
-    onlineUsers: onlineUsers.filter(u => u.uid !== user?.uid), // Exclude current user
-    loading,
-    totalOnline: onlineUsers.length
-  };
+  return { onlineUsers, loading };
 };
